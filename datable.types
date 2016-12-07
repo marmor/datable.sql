@@ -1,0 +1,60 @@
+bigint	\N	0	t
+bigserial	\N	0	f
+bit	\N	1	t
+bit varying	\N	1	t
+boolean	\N	0	t
+box	\N	0	f
+bytea	\N	0	f
+character	\N	1	t
+character varying	\N	1	t
+cidr	\N	0	f
+circle	\N	0	f
+date	\N	0	t
+double precision	\N	0	t
+inet	\N	0	f
+integer	\N	0	t
+interval	\N	1	t
+json	\N	0	f
+jsonb	\N	0	f
+line	\N	0	f
+lseg	\N	0	f
+macaddr	\N	0	f
+money	\N	0	f
+numeric	\N	2	t
+path	\N	0	f
+pg_lsn	\N	0	f
+point	\N	0	f
+polygon	\N	0	f
+real	\N	0	t
+smallint	\N	0	t
+smallserial	\N	0	f
+serial	\N	0	f
+text	\N	0	f
+time	\N	1	t
+time with time zone	\N	1	t
+timestamp	\N	1	t
+timestamp with time zone	\N	1	t
+tsquery	\N	0	f
+tsvector	\N	0	f
+txid_snapshot	\N	0	f
+uuid	\N	0	f
+xml	\N	0	t
+int8	bigint	0	f
+serial8	bigserial	0	f
+varbit	bit varying	0	f
+bool	boolean	0	f
+char	character	1	t
+varchar	character varying	1	t
+float8	double precision	0	f
+int	integer	0	f
+int4	integer	0	f
+decimal	numeric	2	t
+float4	real	0	f
+int2	smallint	0	f
+serial2	smallserial	0	f
+serial4	serial	0	f
+time without time zone	time	1	t
+timetz	time with time zone	1	f
+timestamp without time zone	timestamp	1	t
+timestamptz	timestamp with time zone	1	f
+tstzrange	\N	0	f
