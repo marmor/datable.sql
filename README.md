@@ -5,4 +5,4 @@ An ultra thin layer over relational databases that doubles their functionality a
 
 The layer is written in PL/SQL, and can be inserted to existing database in one command, without changing anything in the lower layers (the database and the data), or the upper layers (e.g. the applications).
 
-DaTableSQL is the basis of the new DaTableJS Web&Mobile framework, and withot it, DaTableJS could not be so easy and powerful.
+DaTableSQL is the basis of the new DaTableJS Web&Mobile framework, and without it, DaTableJS could not be so easy and powerful.
