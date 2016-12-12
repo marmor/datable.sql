@@ -16,6 +16,7 @@
 0.2. For temporal_tables, go to:
 
            [http://pgxn.org/dist/temporal_tables](http://pgxn.org/dist/temporal_tables)
+
      and follow the instructions.
      Note: the following command is not needed, it's automatically run by DaTableSQL:
            CREATE EXTENSION temporal_tables;
