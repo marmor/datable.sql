@@ -11,8 +11,10 @@
    
 ##Installing the dependencies:
 0.1. For PostgreSQL (9.5 and up), go to:
+
            [https://www.postgresql.org](https://www.postgresql.org)
 0.2. For temporal_tables, go to:
+
            [http://pgxn.org/dist/temporal_tables](http://pgxn.org/dist/temporal_tables)
      and follow the instructions.
      Note: the following command is not needed, it's automatically run by DaTableSQL:
