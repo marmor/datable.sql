@@ -1,5 +1,5 @@
 1. Install the dependencies (PostgreSQL 9.5 and up, temporal_tables) (see below)
-2. Look for the directory of the extensions
+2. Look for the directory of the extensions<br/>
    ("/usr/local/pgsql/share/extension/" under most platforms),
    where the other extensions (e.g. temporal_tables) were installed,
    enter this directory,
