@@ -1,109 +1,168 @@
-CREATE OR REPLACE FUNCTION load_temporal() RETURNS void AS
-$$
-DECLARE data_dir TEXT;
+CREATE OR REPLACE FUNCTION load_temporal() RETURNS void AS $$
+DECLARE dir TEXT;
 BEGIN
-  SELECT setting into data_dir FROM pg_settings WHERE name = 'data_directory';
-  data_dir := data_dir || '/../share/extension/datable.types';
+  SELECT setting INTO dir FROM pg_settings WHERE name = 'data_directory';
+  dir := dir || '/../share/extension/datable.types'; -- yuck, must be better way
 
---  IF ((SELECT count(*) FROM pg_extension WHERE extname = 'temporal_tables') = 0) THEN
---    CREATE EXTENSION temporal_tables;
---  END IF;
-    CREATE EXTENSION IF NOT EXISTS temporal_tables;
+  CREATE EXTENSION IF NOT EXISTS temporal_tables;
 
-  IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = '____all_tables') THEN
-    CREATE TABLE ____all_tables (
+  IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'dTbTables') THEN
+    CREATE TABLE dTbTables (
       name TEXT PRIMARY KEY,
       is_temporal BOOLEAN DEFAULT TRUE
     );
   END IF;
 
-  IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = '____column_types') THEN
-    CREATE TABLE ____column_types (
+  IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'dTbColumnTypes') THEN
+    CREATE TABLE dTbColumnTypes (
       name TEXT PRIMARY KEY,
-      alias TEXT REFERENCES ____column_types,
+      alias TEXT REFERENCES dTbColumnTypes,
       parameters SMALLINT,
       is_standard BOOLEAN
     );
 -- Parameter of "TIME[STAMP] WITH[OUT] TIME ZONE" must be handled explicitly!
 -- In addition, currently only the 2nd parameter of INTERVAL is supported
 --     ( https://www.postgresql.org/docs/9.6/static/datatype-datetime.html )
-    EXECUTE 'COPY ____column_types (name, alias, parameters, is_standard) FROM ''' || data_dir || '''';
+    EXECUTE 'COPY dTbColumnTypes (name, alias, parameters, is_standard)
+             FROM ''' || dir || '''';
   END IF;
 
-  IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = '____all_columns') THEN
---    CREATE TYPE ____tag AS TEXT;
-    CREATE TYPE ____key_type AS ENUM ('PRIMARY KEY', 'UNIQUE', 'NOT NULL', '');
-    CREATE TABLE ____all_columns (
+  IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'dTbColumns') THEN
+    CREATE TYPE dTbKeyType AS ENUM ('PRIMARY KEY', 'UNIQUE', 'NOT NULL', '');
+    CREATE TABLE dTbColumns (
       name TEXT,
       column_id SERIAL UNIQUE,
-      _type TEXT REFERENCES ____column_types,
+      attnum SMALLINT,
+      _type TEXT REFERENCES dTbColumnTypes,
       _length SMALLINT,
       _default TEXT,
-      key_type ____key_type,
-      _table TEXT REFERENCES ____all_tables,
-      _reference TEXT REFERENCES ____all_tables,
+      key_type dTbKeyType,
+      _table TEXT REFERENCES dTbTables,
+      _reference TEXT REFERENCES dTbTables,
       max_size SMALLINT,
       recommended_size SMALLINT,
       recommended_width SMALLINT,
       editable BOOLEAN DEFAULT TRUE,
       header TEXT,
-      PRIMARY KEY (_table,name)
+      PRIMARY KEY (_table,name),
+      UNIQUE (_table,attnum)
     );
   END IF;
--- CREATE TYPE tag & code & order
+-- TODO: CREATE TYPE tag & code & order
 END;
-$$
-LANGUAGE 'plpgsql';
+$$ LANGUAGE 'plpgsql';
 
 SELECT load_temporal();
 
-CREATE OR REPLACE FUNCTION datableCreateTable() RETURNS event_trigger AS
-$$
+CREATE OR REPLACE FUNCTION dTbNewTable(tbl TEXT) RETURNS void AS $$
 DECLARE
-  r RECORD;
-  r2 RECORD;
+  seq TEXT := '__' || tbl || '_seq';
 BEGIN
+  EXECUTE 'CREATE SEQUENCE ' || seq;
+  EXECUTE 'ALTER TABLE ' || tbl ||
+    ' ADD COLUMN dTbSysPeriod tstzrange NOT NULL
+          DEFAULT tstzrange(current_timestamp, null),
+      ADD COLUMN dTbModifier text DEFAULT SESSION_USER,
+      ADD COLUMN dTbDescription text,
+      ADD COLUMN dTbOrder numeric NOT NULL DEFAULT nextval(''' || seq || '''),
+      ADD COLUMN dTbTag TEXT';
+--    ADD COLUMN dTbTag dTbTagType';
+  EXECUTE 'ALTER SEQUENCE ' || seq || ' OWNED BY ' || tbl ||'.dTbOrder';
+  EXECUTE 'CREATE TABLE __' || tbl || ' () INHERITS ( ' || tbl || ' )';
+  EXECUTE 'CREATE TRIGGER __versioning_' || tbl ||
+' BEFORE INSERT OR UPDATE OR DELETE ON ' || tbl ||
+' FOR EACH ROW EXECUTE PROCEDURE versioning(''dtbsysperiod'', ''__' || tbl ||
+''', true)';
+  EXECUTE 'INSERT INTO dTbTables VALUES ( ''' || tbl || ''' )';
+END;
+$$ LANGUAGE 'plpgsql';
+
+CREATE OR REPLACE FUNCTION ddlstart() RETURNS event_trigger AS $$
+DECLARE
+  e RECORD;
+BEGIN
+RAISE NOTICE 'start: DDL(%,%) (depth=%)', TG_EVENT, TG_TAG, pg_trigger_depth();
   IF (pg_trigger_depth() = 0) THEN
-    FOR r IN
-      SELECT * FROM pg_event_trigger_ddl_commands() LOOP
-        DECLARE _r TEXT;
+    FOR e IN SELECT * FROM pg_event_trigger_ddl_commands() LOOP
+      DECLARE
+        r RECORD;
+        tbl TEXT := substring(e.object_identity,8);	-- get rid of "public."
       BEGIN
-        _r := substring(r.object_identity,8);
-        IF (substring(_r,1,2) != '__') THEN
-          -- RAISE NOTICE '%,%', pg_trigger_depth(), _r;
-          EXECUTE 'CREATE SEQUENCE __' || _r || '_seq';
-          EXECUTE 'ALTER TABLE ' || _r ||
-            ' ADD COLUMN __sys_period tstzrange NOT NULL DEFAULT tstzrange(current_timestamp, null),
-              ADD COLUMN __modifier text DEFAULT SESSION_USER,
-              ADD COLUMN __description text,
-              ADD COLUMN __order numeric NOT NULL DEFAULT nextval(''__' || _r || '_seq''),
-              ADD COLUMN __tag TEXT';
---              ADD COLUMN __tag ____tag';
-          EXECUTE 'ALTER  SEQUENCE __' || _r || '_seq OWNED BY ' || _r || '.__order';
-          EXECUTE 'CREATE TABLE __' || _r || ' () INHERITS ( ' || _r || ' )';
-          EXECUTE 'CREATE TRIGGER __versioning_' || _r || ' BEFORE INSERT OR UPDATE OR DELETE ON ' || _r || ' FOR EACH ROW EXECUTE PROCEDURE versioning(''__sys_period'', ''__' || _r ||''', true)';
-          EXECUTE 'INSERT INTO ____all_tables VALUES ( ''' || _r || ''' )';
-          FOR r2 IN SELECT * FROM information_schema.columns WHERE table_name = _r
-          LOOP
-            EXECUTE 'INSERT INTO ____all_columns (_table,name,_type) VALUES ( ''' || _r || ''',''' || r2.column_name || ''',''' || r2.data_type || ''' )';
+RAISE NOTICE '%, %, %, %, %',
+e.command_tag, e.object_type, e.schema_name, e.object_identity, e.in_extension;
+        IF (substring(tbl,1,2) != '__') THEN
+          FOR r IN SELECT * FROM information_schema.columns
+                             WHERE table_name = tbl LOOP
+            CASE e.command_tag
+              WHEN 'CREATE TABLE' THEN
+            ELSE
+            END CASE;
           END LOOP;
-          RAISE NOTICE '%', _r;
         END IF;
--- IF (substring(_r,1,6) != '______') THEN
-        -- EXECUTE 'CREATE TABLE __' || _r || ' () INHERITS ( ' || _r || ' )';
---         RAISE NOTICE '%,%,%,%,%,%,%,%', _r,r.classid,r.objid,r.objsubid,r.command_tag,r.object_type,r.schema_name,r.in_extension;
--- IF r.command_tag = 'ALTER TABLE' THEN
--- FOR r2 IN SELECT * FROM unnest(get_altertable_subcmdtypes(r.command))
--- LOOP
--- RAISE NOTICE '  subcommand: %', r2.unnest;
--- END LOOP;
--- END IF;
--- END IF;
       END;
     END LOOP;
   END IF;
+-- EXCEPTION WHEN event_trigger_protocol_violated THEN
+-- RAISE NOTICE '%', 'event trigger warning!';
 END;
-$$
-LANGUAGE 'plpgsql';
+$$ LANGUAGE 'plpgsql';
 
-CREATE EVENT TRIGGER datableCreateTable ON ddl_command_end WHEN tag IN ('create table') EXECUTE PROCEDURE datableCreateTable();
+CREATE OR REPLACE FUNCTION dTbCreateTable() RETURNS event_trigger AS $$
+DECLARE
+  e RECORD;
+BEGIN
+RAISE NOTICE 'DDL(%,%)', TG_EVENT, TG_TAG;
+  IF (pg_trigger_depth() = 0) THEN
+    FOR e IN SELECT * FROM pg_event_trigger_ddl_commands() LOOP
+      DECLARE
+        r RECORD;
+        tbl TEXT := substring(e.object_identity,8);	-- get rid of "public."
+      BEGIN
+RAISE NOTICE '%, %, %, %, %',
+e.command_tag, e.object_type, e.schema_name, e.object_identity, e.in_extension;
+        IF (substring(tbl,1,2) != '__') THEN
+          IF (e.command_tag = 'CREATE TABLE') THEN
+            PERFORM dTbNewTable(tbl);
+          END IF;
+          FOR r IN SELECT * FROM information_schema.columns
+                             WHERE table_name = tbl LOOP
+            CASE e.command_tag
+              WHEN 'CREATE TABLE' THEN
+                EXECUTE 'INSERT INTO dTbColumns (_table,name,attnum,_type) VALUES ( ''' || tbl || ''',''' || r.column_name || ''',''' || (SELECT attnum FROM pg_attribute WHERE attname = r.column_name AND attrelid = (SELECT oid FROM pg_class WHERE relname = tbl)) || ''',''' || r.data_type || ''' )';
+            ELSE
+            END CASE;
+          END LOOP;
+        END IF;
+      END;
+    END LOOP;
+  END IF;
+-- Temporary, till an event filtering is set:
+EXCEPTION WHEN event_trigger_protocol_violated THEN
+RAISE NOTICE '%', 'event trigger warning!';
+END;
+$$ LANGUAGE 'plpgsql';
+
+CREATE OR REPLACE FUNCTION dTbDropTable() RETURNS event_trigger AS $$
+DECLARE
+  e RECORD;
+BEGIN
+RAISE NOTICE 'DROP(%,%)', TG_EVENT, TG_TAG;
+  IF (pg_trigger_depth() = 0) THEN
+    FOR e IN SELECT * FROM pg_event_trigger_dropped_objects() LOOP
+RAISE NOTICE '%,%,%,%,%,%,%', e.original, e.normal, e.is_temporary, e.object_type, e.schema_name, e.object_name, e.object_identity;
+      IF (e.original='t' AND e.object_type='table' AND e.schema_name='public')
+      THEN
+        IF (substring(e.object_name,1,2) != '__') THEN
+          EXECUTE 'DROP TABLE IF EXISTS __' || e.object_name;
+        END IF;
+      END IF;
+    END LOOP;
+  END IF;
+END;
+$$ LANGUAGE 'plpgsql';
+
+CREATE EVENT TRIGGER ddlstart ON ddl_command_start EXECUTE PROCEDURE ddlstart();
+CREATE EVENT TRIGGER dTbCreateTable ON ddl_command_end EXECUTE PROCEDURE dTbCreateTable();
+CREATE EVENT TRIGGER dTbDropTable ON sql_drop EXECUTE PROCEDURE dTbDropTable();
+-- CREATE EVENT TRIGGER dTbCreateTable ON ddl_command_end WHEN tag IN ('create table') EXECUTE PROCEDURE dTbCreateTable();
+-- CREATE EVENT TRIGGER dTbDropTable ON sql_drop WHEN tag IN ('drop table') EXECUTE PROCEDURE dTbDropTable();
