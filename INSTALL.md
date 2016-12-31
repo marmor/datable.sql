@@ -10,12 +10,12 @@
    (the other users should not run it too)
    
 ##Installing the dependencies:
-0.1. For PostgreSQL (9.5 and up), go to:<br/>
+For PostgreSQL (9.5 and up), go to:<br/>
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[https://www.postgresql.org](https://www.postgresql.org)
 
-0.2. For temporal_tables, go to:<br/>
+For temporal_tables, go to:<br/>
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[http://pgxn.org/dist/temporal_tables](http://pgxn.org/dist/temporal_tables)<br/>
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;and follow the instructions.<br/>
 
-Note: the following command is not needed, it's automatically run by DaTableSQL:<br/>
+Finally:<br/>
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;CREATE EXTENSION temporal_tables;
