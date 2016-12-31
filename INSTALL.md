@@ -17,5 +17,5 @@ For temporal_tables, go to:<br/>
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[http://pgxn.org/dist/temporal_tables](http://pgxn.org/dist/temporal_tables)<br/>
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;and follow the instructions.<br/>
 
-Finally:<br/>
+And finally:<br/>
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;CREATE EXTENSION temporal_tables;
