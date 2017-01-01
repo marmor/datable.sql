@@ -116,11 +116,12 @@ RAISE NOTICE 'DDL(%,%)', TG_EVENT, TG_TAG;
     FOR e IN SELECT * FROM pg_event_trigger_ddl_commands() LOOP
       DECLARE
         r RECORD;
-        tbl TEXT := substring(e.object_identity,8);	-- get rid of "public."
+        tbl TEXT = e.object_identity;
       BEGIN
 RAISE NOTICE '%, %, %, %, %',
 e.command_tag, e.object_type, e.schema_name, e.object_identity, e.in_extension;
-        IF (substring(tbl,1,2) != '__') THEN
+        IF (substring(tbl,1,7) = 'public.' AND substring(tbl,8,2) != '__') THEN
+          tbl := substring(tbl, 8);
           IF (e.command_tag = 'CREATE TABLE') THEN
             PERFORM dTbNewTable(tbl);
           END IF;
@@ -145,6 +146,7 @@ $$ LANGUAGE 'plpgsql';
 CREATE OR REPLACE FUNCTION dTbDropTable() RETURNS event_trigger AS $$
 DECLARE
   e RECORD;
+  t RECORD;
 BEGIN
 RAISE NOTICE 'DROP(%,%)', TG_EVENT, TG_TAG;
   IF (pg_trigger_depth() = 0) THEN
@@ -152,8 +154,11 @@ RAISE NOTICE 'DROP(%,%)', TG_EVENT, TG_TAG;
 RAISE NOTICE '%,%,%,%,%,%,%', e.original, e.normal, e.is_temporary, e.object_type, e.schema_name, e.object_name, e.object_identity;
       IF (e.original='t' AND e.object_type='table' AND e.schema_name='public')
       THEN
-        IF (substring(e.object_name,1,2) != '__') THEN
-          EXECUTE 'DROP TABLE IF EXISTS __' || e.object_name;
+        t = e.object_name;
+        IF (substring(t,1,2) != '__') THEN
+          EXECUTE 'DROP TABLE IF EXISTS __' || t;
+          EXECUTE 'DELETE FROM dTbColumns WHERE _table = ''' || t || '''';
+          EXECUTE 'DELETE FROM dTbTables  WHERE  name  = ''' || t || '''';
         END IF;
       END IF;
     END LOOP;
