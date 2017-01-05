@@ -1,5 +1,19 @@
+SET dTbGlobal.in_recurs to 0;
+
+CREATE OR REPLACE FUNCTION on_columns_delete() RETURNS TRIGGER AS $$
+BEGIN
+RAISE NOTICE '-> on_columns_delete(%.%): RELNAME=%,TABLE_NAME=%,TABLE_SCHEMA=%,NARGS=% (depth=%)', OLD._table, OLD.name, TG_RELNAME, TG_TABLE_NAME, TG_TABLE_SCHEMA, TG_NARGS, pg_trigger_depth();
+  IF (pg_trigger_depth() = 1 AND current_setting('dTbGlobal.in_recurs') = '0') THEN
+    EXECUTE 'ALTER TABLE ' || OLD._table || ' DROP COLUMN ' || OLD.name;
+  END IF;
+RAISE NOTICE '<- on_columns_delete';
+  RETURN OLD;
+END;
+$$ LANGUAGE 'plpgsql';
+
 CREATE OR REPLACE FUNCTION load_temporal() RETURNS void AS $$
-DECLARE dir TEXT;
+DECLARE
+  dir TEXT;
 BEGIN
   SELECT setting INTO dir FROM pg_settings WHERE name = 'data_directory';
   dir := dir || '/../share/extension/datable.types'; -- yuck, must be better way
@@ -47,6 +61,8 @@ BEGIN
       PRIMARY KEY (_table,name),
       UNIQUE (_table,attnum)
     );
+    CREATE TRIGGER on_columns_delete BEFORE DELETE ON dTbColumns
+      FOR EACH ROW EXECUTE PROCEDURE on_columns_delete();
   END IF;
 -- TODO: CREATE TYPE tag & code & order
 END;
@@ -81,7 +97,7 @@ CREATE OR REPLACE FUNCTION ddlstart() RETURNS event_trigger AS $$
 DECLARE
   e RECORD;
 BEGIN
-RAISE NOTICE 'start: DDL(%,%) (depth=%)', TG_EVENT, TG_TAG, pg_trigger_depth();
+RAISE NOTICE '-> ddlstart(%,%): (depth=%)', TG_EVENT, TG_TAG, pg_trigger_depth();
   IF (pg_trigger_depth() = 0) THEN
     FOR e IN SELECT * FROM pg_event_trigger_ddl_commands() LOOP
       DECLARE
@@ -104,14 +120,15 @@ e.command_tag, e.object_type, e.schema_name, e.object_identity, e.in_extension;
   END IF;
 -- EXCEPTION WHEN event_trigger_protocol_violated THEN
 -- RAISE NOTICE '%', 'event trigger warning!';
+RAISE NOTICE '<- ddlstart';
 END;
 $$ LANGUAGE 'plpgsql';
 
-CREATE OR REPLACE FUNCTION dTbCreateTable() RETURNS event_trigger AS $$
+CREATE OR REPLACE FUNCTION ddlend() RETURNS event_trigger AS $$
 DECLARE
   e RECORD;
 BEGIN
-RAISE NOTICE 'DDL(%,%)', TG_EVENT, TG_TAG;
+RAISE NOTICE '-> ddlend(%,%): (depth=%)', TG_EVENT, TG_TAG, pg_trigger_depth();
   IF (pg_trigger_depth() = 0) THEN
     FOR e IN SELECT * FROM pg_event_trigger_ddl_commands() LOOP
       DECLARE
@@ -137,37 +154,45 @@ e.command_tag, e.object_type, e.schema_name, e.object_identity, e.in_extension;
       END;
     END LOOP;
   END IF;
+RAISE NOTICE '<- ddlend';
 -- Temporary, till an event filtering is set:
 EXCEPTION WHEN event_trigger_protocol_violated THEN
-RAISE NOTICE '%', 'event trigger warning!';
+RAISE NOTICE 'event trigger warning!';
+RAISE NOTICE '<- ddlend';
 END;
 $$ LANGUAGE 'plpgsql';
 
-CREATE OR REPLACE FUNCTION dTbDropTable() RETURNS event_trigger AS $$
+CREATE OR REPLACE FUNCTION sqldrop() RETURNS event_trigger AS $$
 DECLARE
   e RECORD;
-  t RECORD;
 BEGIN
-RAISE NOTICE 'DROP(%,%)', TG_EVENT, TG_TAG;
+RAISE NOTICE '-> sqldrop(%,%): (depth=%)', TG_EVENT, TG_TAG, pg_trigger_depth();
   IF (pg_trigger_depth() = 0) THEN
     FOR e IN SELECT * FROM pg_event_trigger_dropped_objects() LOOP
 RAISE NOTICE '%,%,%,%,%,%,%', e.original, e.normal, e.is_temporary, e.object_type, e.schema_name, e.object_name, e.object_identity;
       IF (e.original='t' AND e.object_type='table' AND e.schema_name='public')
       THEN
-        t = e.object_name;
-        IF (substring(t,1,2) != '__') THEN
-          EXECUTE 'DROP TABLE IF EXISTS __' || t;
-          EXECUTE 'DELETE FROM dTbColumns WHERE _table = ''' || t || '''';
-          EXECUTE 'DELETE FROM dTbTables  WHERE  name  = ''' || t || '''';
-        END IF;
+        DECLARE
+          t TEXT := e.object_name;
+        BEGIN
+          IF (substring(t,1,2) != '__') THEN
+RAISE NOTICE '% !!!', t;
+            EXECUTE 'DROP TABLE IF EXISTS __' || t;
+            SET dTbGlobal.in_recurs to 1;
+            EXECUTE 'DELETE FROM dTbColumns WHERE _table = ''' || t || '''';
+            EXECUTE 'DELETE FROM dTbTables  WHERE  name  = ''' || t || '''';
+            SET dTbGlobal.in_recurs to 0;
+          END IF;
+        END;
       END IF;
     END LOOP;
   END IF;
+RAISE NOTICE '<- sqldrop';
 END;
 $$ LANGUAGE 'plpgsql';
 
 CREATE EVENT TRIGGER ddlstart ON ddl_command_start EXECUTE PROCEDURE ddlstart();
-CREATE EVENT TRIGGER dTbCreateTable ON ddl_command_end EXECUTE PROCEDURE dTbCreateTable();
-CREATE EVENT TRIGGER dTbDropTable ON sql_drop EXECUTE PROCEDURE dTbDropTable();
--- CREATE EVENT TRIGGER dTbCreateTable ON ddl_command_end WHEN tag IN ('create table') EXECUTE PROCEDURE dTbCreateTable();
--- CREATE EVENT TRIGGER dTbDropTable ON sql_drop WHEN tag IN ('drop table') EXECUTE PROCEDURE dTbDropTable();
+CREATE EVENT TRIGGER ddlend ON ddl_command_end EXECUTE PROCEDURE ddlend();
+CREATE EVENT TRIGGER sqldrop ON sql_drop EXECUTE PROCEDURE sqldrop();
+-- CREATE EVENT TRIGGER ddlend ON ddl_command_end WHEN tag IN ('create table') EXECUTE PROCEDURE ddlend();
+-- CREATE EVENT TRIGGER sqldrop ON sql_drop WHEN tag IN ('drop table') EXECUTE PROCEDURE sqldrop();
