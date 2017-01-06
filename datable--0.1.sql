@@ -1,13 +1,58 @@
 SET dTbGlobal.in_recurs to 0;
 
+CREATE OR REPLACE FUNCTION CheckDepthRecurs(depth INTEGER) RETURNS BOOLEAN AS $$
+BEGIN
+  IF (pg_trigger_depth() = depth) THEN
+    IF (current_setting('dTbGlobal.in_recurs') = '0') THEN
+      RETURN 't';
+    END IF;
+  END IF;
+  RETURN 'f';
+END;
+$$ LANGUAGE 'plpgsql';
+
 CREATE OR REPLACE FUNCTION on_columns_delete() RETURNS TRIGGER AS $$
 BEGIN
 RAISE NOTICE '-> on_columns_delete(%.%): RELNAME=%,TABLE_NAME=%,TABLE_SCHEMA=%,NARGS=% (depth=%)', OLD._table, OLD.name, TG_RELNAME, TG_TABLE_NAME, TG_TABLE_SCHEMA, TG_NARGS, pg_trigger_depth();
-  IF (pg_trigger_depth() = 1 AND current_setting('dTbGlobal.in_recurs') = '0') THEN
+  IF (CheckDepthRecurs(1)) THEN
     EXECUTE 'ALTER TABLE ' || OLD._table || ' DROP COLUMN ' || OLD.name;
   END IF;
 RAISE NOTICE '<- on_columns_delete';
   RETURN OLD;
+END;
+$$ LANGUAGE 'plpgsql';
+
+CREATE OR REPLACE FUNCTION on_columns_update() RETURNS TRIGGER AS $$
+BEGIN
+RAISE NOTICE '-> on_columns_update(%.%): RELNAME=%,TABLE_NAME=%,TABLE_SCHEMA=%,NARGS=% (depth=%)', NEW._table, NEW.name, TG_RELNAME, TG_TABLE_NAME, TG_TABLE_SCHEMA, TG_NARGS, pg_trigger_depth();
+  IF (CheckDepthRecurs(1)) THEN
+    IF (NEW.name != OLD.name) THEN
+      EXECUTE 'ALTER TABLE ' || NEW._table || ' RENAME COLUMN ' || OLD.name ||
+                                                         ' TO ' || NEW.name;
+    ELSEIF (NEW._type != OLD._type) THEN
+      EXECUTE 'ALTER TABLE ' || NEW._table || ' ALTER COLUMN ' || NEW.name ||
+           ' SET DATA TYPE ' || NEW._type  || ' USING '        || NEW.name ||
+                        '::' || NEW._type;
+    END IF;
+  END IF;
+RAISE NOTICE '<- on_columns_update';
+  RETURN NEW;
+END;
+$$ LANGUAGE 'plpgsql';
+
+CREATE OR REPLACE FUNCTION on_columns_insert() RETURNS TRIGGER AS $$
+DECLARE mytry TEXT;
+BEGIN
+RAISE NOTICE '-> on_columns_insert(%.%): RELNAME=%,TABLE_NAME=%,TABLE_SCHEMA=%,NARGS=% (depth=%)', NEW._table, NEW.name, TG_RELNAME, TG_TABLE_NAME, TG_TABLE_SCHEMA, TG_NARGS, pg_trigger_depth();
+  IF (CheckDepthRecurs(1)) THEN
+    EXECUTE 'ALTER TABLE ' || NEW._table || ' ADD COLUMN ' || NEW.name || ' ' ||
+                              NEW._type;
+    SELECT attnum INTO NEW.attnum FROM pg_attribute
+                                WHERE attname = NEW.name AND attrelid =
+      (SELECT oid FROM pg_class WHERE relname = NEW._table);
+  END IF;
+RAISE NOTICE '<- on_columns_insert';
+  RETURN NEW;
 END;
 $$ LANGUAGE 'plpgsql';
 
@@ -46,7 +91,7 @@ BEGIN
     CREATE TABLE dTbColumns (
       name TEXT,
       column_id SERIAL UNIQUE,
-      attnum SMALLINT,
+      attnum SMALLINT DEFAULT -1,
       _type TEXT REFERENCES dTbColumnTypes,
       _length SMALLINT,
       _default TEXT,
@@ -63,6 +108,10 @@ BEGIN
     );
     CREATE TRIGGER on_columns_delete BEFORE DELETE ON dTbColumns
       FOR EACH ROW EXECUTE PROCEDURE on_columns_delete();
+    CREATE TRIGGER on_columns_update BEFORE UPDATE ON dTbColumns
+      FOR EACH ROW EXECUTE PROCEDURE on_columns_update();
+    CREATE TRIGGER on_columns_insert BEFORE INSERT ON dTbColumns
+      FOR EACH ROW EXECUTE PROCEDURE on_columns_insert();
   END IF;
 -- TODO: CREATE TYPE tag & code & order
 END;
@@ -98,7 +147,7 @@ DECLARE
   e RECORD;
 BEGIN
 RAISE NOTICE '-> ddlstart(%,%): (depth=%)', TG_EVENT, TG_TAG, pg_trigger_depth();
-  IF (pg_trigger_depth() = 0) THEN
+  IF (CheckDepthRecurs(0)) THEN
     FOR e IN SELECT * FROM pg_event_trigger_ddl_commands() LOOP
       DECLARE
         r RECORD;
@@ -129,7 +178,7 @@ DECLARE
   e RECORD;
 BEGIN
 RAISE NOTICE '-> ddlend(%,%): (depth=%)', TG_EVENT, TG_TAG, pg_trigger_depth();
-  IF (pg_trigger_depth() = 0) THEN
+  IF (CheckDepthRecurs(0)) THEN
     FOR e IN SELECT * FROM pg_event_trigger_ddl_commands() LOOP
       DECLARE
         r RECORD;
@@ -139,6 +188,7 @@ RAISE NOTICE '%, %, %, %, %',
 e.command_tag, e.object_type, e.schema_name, e.object_identity, e.in_extension;
         IF (substring(tbl,1,7) = 'public.' AND substring(tbl,8,2) != '__') THEN
           tbl := substring(tbl, 8);
+          SET dTbGlobal.in_recurs to 1;
           IF (e.command_tag = 'CREATE TABLE') THEN
             PERFORM dTbNewTable(tbl);
           END IF;
@@ -146,10 +196,16 @@ e.command_tag, e.object_type, e.schema_name, e.object_identity, e.in_extension;
                              WHERE table_name = tbl LOOP
             CASE e.command_tag
               WHEN 'CREATE TABLE' THEN
-                EXECUTE 'INSERT INTO dTbColumns (_table,name,attnum,_type) VALUES ( ''' || tbl || ''',''' || r.column_name || ''',''' || (SELECT attnum FROM pg_attribute WHERE attname = r.column_name AND attrelid = (SELECT oid FROM pg_class WHERE relname = tbl)) || ''',''' || r.data_type || ''' )';
+                EXECUTE 'INSERT INTO dTbColumns (_table,name,attnum,_type)
+                                  VALUES ( ''' || tbl || ''',''' || r.column_name || ''',''' ||
+                  (SELECT attnum FROM pg_attribute
+                                  WHERE attname = r.column_name AND attrelid =
+                    (SELECT oid  FROM pg_class WHERE relname = tbl))
+                                  || ''',''' || r.data_type || ''' )';
             ELSE
             END CASE;
           END LOOP;
+          SET dTbGlobal.in_recurs to 0;
         END IF;
       END;
     END LOOP;
@@ -167,7 +223,7 @@ DECLARE
   e RECORD;
 BEGIN
 RAISE NOTICE '-> sqldrop(%,%): (depth=%)', TG_EVENT, TG_TAG, pg_trigger_depth();
-  IF (pg_trigger_depth() = 0) THEN
+  IF (CheckDepthRecurs(0)) THEN
     FOR e IN SELECT * FROM pg_event_trigger_dropped_objects() LOOP
 RAISE NOTICE '%,%,%,%,%,%,%', e.original, e.normal, e.is_temporary, e.object_type, e.schema_name, e.object_name, e.object_identity;
       IF (e.original='t' AND e.object_type='table' AND e.schema_name='public')
