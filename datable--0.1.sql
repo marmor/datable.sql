@@ -41,9 +41,8 @@ END;
 $$ LANGUAGE 'plpgsql';
 
 CREATE OR REPLACE FUNCTION on_columns_insert() RETURNS TRIGGER AS $$
-DECLARE mytry TEXT;
 BEGIN
-RAISE NOTICE '-> on_columns_insert(%.%): RELNAME=%,TABLE_NAME=%,TABLE_SCHEMA=%,NARGS=% (depth=%)', NEW._table, NEW.name, TG_RELNAME, TG_TABLE_NAME, TG_TABLE_SCHEMA, TG_NARGS, pg_trigger_depth();
+RAISE NOTICE '-> on_columns_insert(%.%): RELNAME=%,TABLE_NAME=%,TABLE_SCHEMA=%,NARGS=% (depth=%)', NEW._table, NEW.name, TG_RELNAME, TG_TABLE_NAME, TG_TABLE_SCHEMA,TG_NARGS,pg_trigger_depth();
   IF (CheckDepthRecurs(1)) THEN
     EXECUTE 'ALTER TABLE ' || NEW._table || ' ADD COLUMN ' || NEW.name || ' ' ||
                               NEW._type;
@@ -53,6 +52,28 @@ RAISE NOTICE '-> on_columns_insert(%.%): RELNAME=%,TABLE_NAME=%,TABLE_SCHEMA=%,N
   END IF;
 RAISE NOTICE '<- on_columns_insert';
   RETURN NEW;
+END;
+$$ LANGUAGE 'plpgsql';
+
+CREATE OR REPLACE FUNCTION on_tables_insert() RETURNS TRIGGER AS $$
+BEGIN
+RAISE NOTICE '-> on_tables_insert(%): (depth=%)', NEW.name, pg_trigger_depth();
+  IF (CheckDepthRecurs(1)) THEN
+    EXECUTE 'CREATE TABLE ' || NEW.name || '()';
+  END IF;
+RAISE NOTICE '<- on_tables_insert';
+  RETURN NEW;
+END;
+$$ LANGUAGE 'plpgsql';
+
+CREATE OR REPLACE FUNCTION on_tables_delete() RETURNS TRIGGER AS $$
+BEGIN
+RAISE NOTICE '-> on_tables_delete(%): (depth=%)', OLD.name, pg_trigger_depth();
+  IF (CheckDepthRecurs(1)) THEN
+    EXECUTE 'DROP TABLE ' || OLD.name || ' CASCADE';
+  END IF;
+RAISE NOTICE '<- on_tables_delete';
+  RETURN OLD;
 END;
 $$ LANGUAGE 'plpgsql';
 
@@ -112,6 +133,10 @@ BEGIN
       FOR EACH ROW EXECUTE PROCEDURE on_columns_update();
     CREATE TRIGGER on_columns_insert BEFORE INSERT ON dTbColumns
       FOR EACH ROW EXECUTE PROCEDURE on_columns_insert();
+    CREATE TRIGGER on_tables_insert BEFORE INSERT ON dTbTables
+      FOR EACH ROW EXECUTE PROCEDURE on_tables_insert();
+    CREATE TRIGGER on_tables_delete BEFORE DELETE ON dTbTables
+      FOR EACH ROW EXECUTE PROCEDURE on_tables_delete();
   END IF;
 -- TODO: CREATE TYPE tag & code & order
 END;
@@ -151,11 +176,12 @@ RAISE NOTICE '-> ddlstart(%,%): (depth=%)', TG_EVENT, TG_TAG, pg_trigger_depth()
     FOR e IN SELECT * FROM pg_event_trigger_ddl_commands() LOOP
       DECLARE
         r RECORD;
-        tbl TEXT := substring(e.object_identity,8);	-- get rid of "public."
+        tbl TEXT := e.object_identity;
       BEGIN
 RAISE NOTICE '%, %, %, %, %',
 e.command_tag, e.object_type, e.schema_name, e.object_identity, e.in_extension;
-        IF (substring(tbl,1,2) != '__') THEN
+        IF (substring(tbl,1,7) = 'public.' AND substring(tbl,8,2) != '__') THEN
+          tbl := substring(tbl, 8);
           FOR r IN SELECT * FROM information_schema.columns
                              WHERE table_name = tbl LOOP
             CASE e.command_tag
@@ -183,28 +209,51 @@ RAISE NOTICE '-> ddlend(%,%): (depth=%)', TG_EVENT, TG_TAG, pg_trigger_depth();
       DECLARE
         r RECORD;
         tbl TEXT = e.object_identity;
+        _type TEXT;
       BEGIN
 RAISE NOTICE '%, %, %, %, %',
 e.command_tag, e.object_type, e.schema_name, e.object_identity, e.in_extension;
         IF (substring(tbl,1,7) = 'public.' AND substring(tbl,8,2) != '__') THEN
           tbl := substring(tbl, 8);
           SET dTbGlobal.in_recurs to 1;
-          IF (e.command_tag = 'CREATE TABLE') THEN
-            PERFORM dTbNewTable(tbl);
-          END IF;
-          FOR r IN SELECT * FROM information_schema.columns
+          CASE e.command_tag
+
+            WHEN 'CREATE TABLE' THEN
+              PERFORM dTbNewTable(tbl);
+              FOR r IN SELECT * FROM information_schema.columns
                              WHERE table_name = tbl LOOP
-            CASE e.command_tag
-              WHEN 'CREATE TABLE' THEN
+                EXECUTE 'INSERT INTO dTbColumns (_table,name,attnum,_type)
+                                  VALUES ( ''' || tbl || ''',''' || r.column_name || ''',''' ||
+                  (SELECT attnum FROM pg_attribute
+                             WHERE attname = r.column_name AND attrelid =
+                    (SELECT oid  FROM pg_class WHERE relname = tbl))
+                                  || ''',''' || r.data_type || ''' )';
+              END LOOP;
+
+            WHEN 'ALTER TABLE' THEN
+              FOR r IN SELECT column_name FROM information_schema.columns
+                     WHERE table_name = tbl EXCEPT
+                         SELECT name FROM dTbColumns WHERE _table = tbl LOOP
+                SELECT data_type INTO _type FROM information_schema.columns
+                     WHERE table_name = tbl AND column_name = r.column_name;
+RAISE NOTICE '%: %', r.column_name, _type;
                 EXECUTE 'INSERT INTO dTbColumns (_table,name,attnum,_type)
                                   VALUES ( ''' || tbl || ''',''' || r.column_name || ''',''' ||
                   (SELECT attnum FROM pg_attribute
                                   WHERE attname = r.column_name AND attrelid =
                     (SELECT oid  FROM pg_class WHERE relname = tbl))
-                                  || ''',''' || r.data_type || ''' )';
-            ELSE
-            END CASE;
-          END LOOP;
+                                  || ''',''' || _type || ''' )';
+              END LOOP;
+
+              FOR r IN SELECT name FROM dTbColumns WHERE _table = tbl EXCEPT
+                SELECT column_name FROM information_schema.columns
+                                  WHERE table_name = tbl LOOP
+RAISE NOTICE '%', r.name;
+                EXECUTE 'DELETE FROM dTbColumns WHERE _table = ''' || tbl ||
+                                  ''' AND name = ''' || r.name || '''';
+              END LOOP;
+          ELSE
+          END CASE;
           SET dTbGlobal.in_recurs to 0;
         END IF;
       END;
